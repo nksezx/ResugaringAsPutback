@@ -1,0 +1,188 @@
+.decl node(id:number, name:symbol, type:symbol, root:number)
+.input node
+
+.decl pAst(par:number, lchild:number, rchild:number)
+.input pAst
+
+.decl rule(lhs:number, rhs:number)
+.input rule
+
+.decl cAst(par:number, lchild:number, rchild:number)
+.input cAst
+
+.decl coreSyntaxRule(id:number)
+.input coreSyntaxRule
+
+.decl fixed(id:number)
+.input fixed
+
+.decl canMatch(tid:number, pid:number)
+canMatch(TID, PID) :- node(TID, N, TYPE, _), node(PID, N, TYPE, RHS), rule(_, RHS).
+canMatch(TID, PID) :- node(TID, _, "constant", _), node(PID, _, "variable", RHS), rule(_, RHS).
+canMatch(TID, PID) :- node(TID, _, "keyword", _),  node(PID, _, "variable", RHS), rule(_, RHS).
+
+canMatch(TID, PID) :- node(TID, N, TYPE, _), node(PID, N, TYPE, CSYNTAX), coreSyntaxRule(CSYNTAX).
+canMatch(TID, PID) :- node(TID, _, "constant", _), node(PID, _, "variable", CSYNTAX), coreSyntaxRule(CSYNTAX).
+canMatch(TID, PID) :- node(TID, _, "keyword", _),  node(PID, _, "variable", CSYNTAX), coreSyntaxRule(CSYNTAX).
+
+// matched by LHS
+.decl matched(tid:number, pid:number, root:number, rhs:number)
+matched(TID, PID, TID, PID) :- cAst(TID, _, _), !fixed(TID), node(PID, _, _, PID), rule(_, PID), canMatch(TID, PID).
+matched(TID, PID, ROOT, RHS) :- matched(T, P, ROOT, RHS), cAst(T, TID, _), pAst(P, PID, _), canMatch(TID, PID).
+matched(TID, PID, ROOT, RHS) :- matched(T, P, ROOT, RHS), cAst(T, _, TID), pAst(P, _, PID), canMatch(TID, PID).
+
+.decl check(pid:number, state:symbol, root:number, rhs:number)
+check(PID, "checked", ROOT, RHS)   :- node(PID, _, _, RHS), rule(_, RHS), matched(_, PID, ROOT, RHS).
+check(PID, "unchecked", ROOT, RHS) :- node(PID, _, _, RHS), rule(_, RHS), matched(_, _, ROOT, RHS), !matched(_, PID, ROOT, RHS).
+
+.decl incomplete(root:number, rhs:number)
+incomplete(ROOT, RHS) :- check(_, "unchecked", ROOT, RHS).
+
+.decl complete(root:number, rhs:number)
+complete(ROOT, RHS)   :- check(_, _, ROOT, RHS), !incomplete(ROOT, RHS).
+
+.decl state(root:number, lhs:number, rhs:number)
+state(ROOT, LHS, RHS) :- rule(LHS, RHS), complete(ROOT, RHS).
+
+// matched by core syntax
+.decl matchedByCore(tid:number, pid:number, root:number, rule:number)
+matchedByCore(TID, PID, TID, PID) :- fixed(TID), node(PID, _, _, PID), coreSyntaxRule(PID), canMatch(TID, PID).
+matchedByCore(TID, PID, ROOT, LHS) :- matchedByCore(T, P, ROOT, LHS), cAst(T, TID, _), pAst(P, PID, _), canMatch(TID, PID).
+matchedByCore(TID, PID, ROOT, LHS) :- matchedByCore(T, P, ROOT, LHS), cAst(T, _, TID), pAst(P, _, PID), canMatch(TID, PID).
+
+.decl checkByCore(pid:number, state:symbol, root:number, rule:number)
+checkByCore(PID, "checked", ROOT, RULE)   :- node(PID, _, _, RULE), coreSyntaxRule(RULE), matchedByCore(_, PID, ROOT, RULE).
+checkByCore(PID, "unchecked", ROOT, RULE) :- node(PID, _, _, RULE), coreSyntaxRule(RULE), matchedByCore(_, _, ROOT, RULE), !matchedByCore(_, PID, ROOT, RULE).
+
+.decl incompleteByCore(root:number, rule:number)
+incompleteByCore(ROOT, RULE) :- checkByCore(_, "unchecked", ROOT, RULE).
+
+.decl fixedState(root:number, rule:number)
+fixedState(ROOT, RULE) :- checkByCore(_, _, ROOT, RULE), !incompleteByCore(ROOT, RULE).
+.output fixedState
+
+// -------------------------------------------------------------------------------------------------------------------------
+// ***************************************************************************************************************************
+// identical nodes by mapping
+.decl maxNodeID(x: number)
+maxNodeID(Y) :- Y = max X:{node(X, _, _, _)}.
+.decl newNodeMap(new:number, ori:number, mark:number)
+newNodeMap($+MAX+1, ID, ROOT) :- state(ROOT, LHS, _), node(ID, _, _, LHS), maxNodeID(MAX).
+newNodeMap($+MAX+1, ID, ROOT) :- fixedState(ROOT, RULE), node(ID, _, _, RULE), maxNodeID(MAX).
+.output newNodeMap
+
+.decl mappedState(root:number, patternid:number)
+mappedState(ROOT, LHS) :- state(ROOT, LHS_, _), newNodeMap(LHS, LHS_, ROOT).
+mappedState(ROOT, RULE) :- fixedState(ROOT, RULE_), newNodeMap(RULE, RULE_, ROOT).
+
+// identical edges
+.decl dupPAst(par:number, lchild:number, rchild:number, mark:number)
+// 1 1 1
+dupPAst(PP, LL, RR, ROOT) :- pAst(P, L, R), mappedState(ROOT, PATTERNID), newNodeMap(PATTERNID, PATTERNID_, ROOT), node(P, _, _, PATTERNID_), newNodeMap(PP, P, ROOT), newNodeMap(LL, L, ROOT), newNodeMap(RR, R, ROOT).
+// 1 1 0
+dupPAst(PP, LL, R, ROOT) :- pAst(P, L, R), mappedState(ROOT, PATTERNID), newNodeMap(PATTERNID, PATTERNID_, ROOT), node(P, _, _, PATTERNID_), newNodeMap(PP, P, ROOT), newNodeMap(LL, L, ROOT), R = -1.
+// 1 0 1
+dupPAst(PP, L, RR, ROOT) :- pAst(P, L, R), mappedState(ROOT, PATTERNID), newNodeMap(PATTERNID, PATTERNID_, ROOT), node(P, _, _, PATTERNID_), newNodeMap(PP, P, ROOT), L = -1, newNodeMap(RR, R, ROOT).
+// 1 0 0
+dupPAst(PP, L, R, ROOT) :- pAst(P, L, R), mappedState(ROOT, PATTERNID), newNodeMap(PATTERNID, PATTERNID_, ROOT), node(P, _, _, PATTERNID_), newNodeMap(PP, P, ROOT), L = -1, R = -1.
+// ***************************************************************************************************************************
+
+.decl env(pid:number, tid:number)
+env(PID, TID) :- matched(TID, LPID, ROOT, RHS), complete(ROOT, RHS), node(LPID, VARIABLE_NAME, "variable", _), rule(LHS, RHS), node(RPID, VARIABLE_NAME, "variable", LHS), newNodeMap(PID, RPID, ROOT).
+env(PID, TID) :- matchedByCore(TID, PID_, ROOT, _), node(PID_, _, "variable", _), newNodeMap(PID, PID_, ROOT).
+
+.decl value(par:number, lchild:number, rchild:number) // real atomic term, instead of all bindings
+value(PARENT, LCHILD, -1) :- env(_, PARENT), cAst(PARENT, LCHILD, _), !mappedState(PARENT, _).
+value(PARENT, LCHILD, RCHILD) :- value(_, PARENT, _), cAst(PARENT, LCHILD, RCHILD).
+value(PARENT, LCHILD, RCHILD) :- value(_, _, PARENT), cAst(PARENT, LCHILD, RCHILD).
+
+// // Step1: expansion
+// collection of all RHSs; nodes except inner pattern ROOT
+.decl lhs(par:number, lchild:number, rchild:number)
+lhs(PARENT, LCHILD, RCHILD) :- dupPAst(PARENT, LCHILD, RCHILD, ROOT), mappedState(ROOT, PATTERNID), newNodeMap(PARENT, CPID, _), newNodeMap(PATTERNID, PATTERNID_, _), node(CPID, _, _, PATTERNID_), CPID != PATTERNID_.
+lhs(PATTERNID, LCHILD, RCHILD) :- dupPAst(PATTERNID, LCHILD, RCHILD, ROOT), mappedState(ROOT, PATTERNID), !env(_, ROOT).
+
+// deal with topMost first
+.decl topMost(par:number, lchild:number, rchild:number)
+topMost(P, LCHILD, RCHILD) :- dupPAst(P, LCHILD, RCHILD, ROOT), mappedState(ROOT, P).
+
+.decl expandedTopMost(par:number, lchild:number, rchild:number)
+// 0 1 0
+// R not exist
+expandedTopMost(P, PATTERNID, R) :- topMost(P, L, R), env(L, TID), mappedState(TID, PATTERNID).
+// 0 0 0
+expandedTopMost(P, L, R) :- topMost(P, L, R), !env(L, _).
+expandedTopMost(P, L, R) :- topMost(P, L, R), env(L, TID), !mappedState(TID, _).
+
+
+.decl expandedRHS(par:number, lchild:number, rchild:number)
+// 1 : can expand; 0 : cannot expand or not variable
+// 0 1 1
+expandedRHS(P, LRHS, RRHS) :- lhs(P, L, R), env(L, LTID), env(R, RTID), mappedState(LTID, LRHS), mappedState(RTID, RRHS).
+// 1 0 1
+expandedRHS(PRHS, LCHILD, RRHS) :- lhs(P, _, R), env(P, PTID), env(R, RTID), mappedState(PTID, PRHS), mappedState(RTID, RRHS), expandedTopMost(PRHS, LCHILD, _).
+
+// 0 1 0
+// case 1: variable but cannot expand
+expandedRHS(P, LRHS, R) :- lhs(P, L, R), env(L, LTID), mappedState(LTID, LRHS), env(R, RTID), !mappedState(RTID, _).
+// case 2: exist but not variable or not exist
+expandedRHS(P, LRHS, R) :- lhs(P, L, R), env(L, LTID), mappedState(LTID, LRHS), !env(R, _).
+
+// 0 0 1
+expandedRHS(P, L, RRHS) :- lhs(P, L, R), !env(P, _), !env(L, _), env(R, RTID), mappedState(RTID, RRHS).
+expandedRHS(P, L, RRHS) :- lhs(P, L, R), !env(P, _), L=-1, env(R, RTID), mappedState(RTID, RRHS).
+expandedRHS(P, L, RRHS) :- lhs(P, L, R), env(P, PTID), !mappedState(PTID, _), env(R, RTID), mappedState(RTID, RRHS).
+
+// 1 0 0
+expandedRHS(PRHS, LCHILD, R) :- lhs(P, _, R), env(P, PTID), mappedState(PTID, PRHS), !env(R, _), expandedTopMost(PRHS, LCHILD, _).
+expandedRHS(PRHS, LCHILD, R) :- lhs(P, _, R), env(P, PTID), mappedState(PTID, PRHS), env(R, RTID), !mappedState(RTID, _), expandedTopMost(PRHS, LCHILD, _).
+expandedRHS(PRHS, LCHILD, R) :- lhs(P, _, R), env(P, PTID), mappedState(PTID, PRHS), R = -1, expandedTopMost(PRHS, LCHILD, _).
+
+// 0 0 0
+// case 1:
+// (1)
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), !env(L, _), !env(R, _).
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), !env(L, _), env(R, RTID), !mappedState(RTID, _).
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), env(L, LTID), !mappedState(LTID, _), !env(R, _).
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), env(L, LTID), !mappedState(LTID, _), env(R, RTID), !mappedState(RTID, _).
+// (2)
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), L=-1, !env(R, _).
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), L=-1, env(R, RTID), !mappedState(RTID, _).
+// (3)
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), !env(L, _), R=-1.
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), env(L, LTID), !mappedState(LTID, _), R=-1.
+// (4)
+expandedRHS(P, L, R) :- lhs(P, L, R), !env(P, _), L=-1, R=-1.
+// case 2:
+expandedRHS(P, L, R) :- lhs(P, L, R), env(P, PTID), !mappedState(PTID, _), !env(R, _).
+expandedRHS(P, L, R) :- lhs(P, L, R), env(P, PTID), !mappedState(PTID, _), env(R, RTID), !mappedState(RTID, _).
+expandedRHS(P, L, R) :- lhs(P, L, R), env(P, PTID), !mappedState(PTID, _), R = -1.
+
+// -----------------------------------------------------------------------------------------------------------------------------------------------------------
+// Step2: substitution
+.decl special(par:number, lchild:number, rchild:number)
+special(PARENT, LCHILD, RCHILD) :- value(PARENT, LCHILD, RCHILD), expandedRHS(PID, _, RID), env(PID, PARENT), RID!=-1.
+
+.decl sAst(par:number, lchild:number, rchild:number)
+// 0 1 1
+sAst(P, LCPID, RCPID) :- expandedRHS(P, L, R), env(L, LCPID), env(R, RCPID).
+// 1 0 1
+sAst(PCPID, LCHILD, RCPID) :- expandedRHS(P, _, R), env(P, PCPID), env(R, RCPID), special(PCPID, LCHILD, _).
+// 0 1 0
+sAst(P, LCPID, R) :- expandedRHS(P, L, R), env(L, LCPID), !env(R, _).
+sAst(P, LCPID, R) :- expandedRHS(P, L, R), env(L, LCPID), R=-1.
+// 0 0 1
+sAst(P, L, RCPID) :- expandedRHS(P, L, R), !env(P, _), !env(L, _), env(R, RCPID).
+sAst(P, L, RCPID) :- expandedRHS(P, L, R), !env(P, _), L=-1, env(R, RCPID).
+// 1 0 0
+sAst(PCPID, LCHILD, R) :- expandedRHS(P, L, R), env(P, PCPID), L=-1, !env(R, _), special(PCPID, LCHILD, _).
+// 0 0 0
+sAst(P, L, R) :- expandedRHS(P, L, R), !env(P, _), !env(L, _), !env(R, _).
+sAst(P, L, R) :- expandedRHS(P, L, R), !env(P, _), L=-1, !env(R, _).
+sAst(P, L, R) :- expandedRHS(P, L, R), !env(P, _), !env(L, _), R=-1.
+sAst(P, L, R) :- expandedRHS(P, L, R), !env(P, _), L=-1, R=-1.
+
+sAst(P, L, R) :- value(P, L, R), !special(P, L, R).
+.output sAst
+
+// Try to collect all the negative cases into a single table and express it as a whole, which can make the code concise
